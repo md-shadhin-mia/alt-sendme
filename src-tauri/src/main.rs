@@ -5,7 +5,7 @@ mod commands;
 mod state;
 mod version;
 
-use commands::{start_sharing, stop_sharing, receive_file, get_sharing_status, check_path_type, get_transport_status, get_file_size};
+use commands::{start_sharing, stop_sharing, receive_file, get_sharing_status, check_path_type, get_transport_status, get_file_size, start_session, connect_session, send_session_message, send_call_signal, stop_session};
 use state::AppState;
 use std::sync::Arc;
 use std::fs;
@@ -72,6 +72,11 @@ fn main() {
             check_path_type,
             get_transport_status,
             get_file_size,
+            start_session,
+            connect_session,
+            send_session_message,
+            send_call_signal,
+            stop_session,
         ])
         .setup(|_app| {
             // Clean up any orphaned .sendme-* directories from previous runs

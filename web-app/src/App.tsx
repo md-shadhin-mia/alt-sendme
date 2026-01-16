@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
+import { invoke } from '@tauri-apps/api/core'
 import { Sender } from './components/sender/Sender'
 import { Receiver } from './components/receiver/Receiver'
+import { SessionView } from './components/session/SessionView'
 import { TitleBar } from './components/TitleBar'
 import { VERSION_DISPLAY } from './lib/version'
 import { TranslationProvider } from './i18n'
@@ -10,39 +12,55 @@ import { LanguageSwitcher } from './components/LanguageSwitcher'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'send' | 'receive'>('send')
+  const [activeTab, setActiveTab] = useState<'send' | 'receive' | 'session'>('send')
   const [isSharing, setIsSharing] = useState(false)
   const [isReceiving, setIsReceiving] = useState(false)
+  const [sessionTicket, setSessionTicket] = useState<string | undefined>()
+  const [isSessionHost, setIsSessionHost] = useState(false)
+  const [inSession, setInSession] = useState(false)
   const isInitialRender = useRef(false)
   const { t } = useTranslation()
 
   useEffect(() => {
-      isInitialRender.current = true
+    isInitialRender.current = true
   }, [])
+
+  if (inSession) {
+    return (
+      <SessionView
+        ticket={sessionTicket}
+        isHost={isSessionHost}
+        onExit={() => {
+          setInSession(false)
+          setSessionTicket(undefined)
+        }}
+      />
+    )
+  }
 
   return (
     <div className="h-screen flex flex-col relative glass-background select-none" style={{ color: 'var(--app-bg-fg)' }}>
       {IS_LINUX && <TitleBar title={t('common:appTitle')} />}
-      
+
       {IS_MACOS && (
-        <div 
-          className="absolute w-full h-10 z-10" 
-          data-tauri-drag-region 
+        <div
+          className="absolute w-full h-10 z-10"
+          data-tauri-drag-region
         />
       )}
-      
+
       <div className="container mx-auto p-8 flex-1 overflow-auto">
         <div className="max-w-2xl mx-auto">
           <h1
-            className="text-3xl font-bold font-mono text-center mb-8 select-none [@media(min-height:680px)]:block hidden" 
+            className="text-3xl font-bold font-mono text-center mb-8 select-none [@media(min-height:680px)]:block hidden"
             style={{ color: 'var(--app-bg-fg)' }}
           >
             {t('common:appTitle')}
           </h1>
-          
-          <div 
-      
-            className="flex space-x-1 mb-6 p-1 rounded-lg relative select-none" 
+
+          <div
+
+            className="flex space-x-1 mb-6 p-1 rounded-lg relative select-none"
             style={{ backgroundColor: 'rgba(255, 255, 255, 0.1)' }}
           >
             <motion.div
@@ -55,24 +73,23 @@ function AppContent() {
               }}
               initial={false}
               animate={{
-                left: activeTab === 'send' ? '4px' : 'calc(50% + 2px)',
-                width: 'calc(50% - 6px)',
+                left: activeTab === 'send' ? '4px' : activeTab === 'receive' ? 'calc(33.33% + 2px)' : 'calc(66.66% + 2px)',
+                width: 'calc(33.33% - 6px)',
               }}
-           
+
             />
-            
+
             <motion.button
               onClick={() => setActiveTab('send')}
-              disabled={isReceiving}
-              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium relative z-10 ${
-                activeTab === 'send'
+              disabled={isReceiving || inSession}
+              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium relative z-10 ${activeTab === 'send'
                   ? ''
                   : 'opacity-70'
-              }`}
+                }`}
               style={{
                 color: 'var(--app-main-view-fg)',
               }}
-             
+
               whileTap={{ scale: 0.98 }}
               transition={{ duration: 0.2 }}
             >
@@ -80,48 +97,119 @@ function AppContent() {
             </motion.button>
             <motion.button
               onClick={() => setActiveTab('receive')}
-              disabled={isSharing}
-              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium relative z-10 ${
-                activeTab === 'receive'
+              disabled={isSharing || inSession}
+              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium relative z-10 ${activeTab === 'receive'
                   ? ''
                   : 'opacity-70'
-              }`}
+                }`}
               style={{
                 color: 'var(--app-main-view-fg)',
               }}
-             
+
               whileTap={{ scale: 0.98 }}
               transition={{ duration: 0.2 }}
             >
               {t('common:receive')}
             </motion.button>
+            <motion.button
+              onClick={() => setActiveTab('session')}
+              disabled={isSharing || isReceiving}
+              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium relative z-10 ${activeTab === 'session'
+                  ? ''
+                  : 'opacity-70'
+                }`}
+              style={{
+                color: 'var(--app-main-view-fg)',
+              }}
+
+              whileTap={{ scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+            >
+              Session
+            </motion.button>
           </div>
-          
-          <div 
+
+          <div
             className="rounded-lg shadow-sm glass-card overflow-hidden"
           >
-        
-              {activeTab === 'send' ? (
-                <motion.div
-                  key="send"
-                  initial={isInitialRender.current ? { opacity: 0, x: -20 } : false }
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                >
-                  <Sender onTransferStateChange={setIsSharing} />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="receive"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                 
-                >
-                  <Receiver onTransferStateChange={setIsReceiving} />
-                </motion.div>
-              )}
-          
+
+            {activeTab === 'send' ? (
+              <motion.div
+                key="send"
+                initial={isInitialRender.current ? { opacity: 0, x: -20 } : false}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+              >
+                <Sender onTransferStateChange={setIsSharing} />
+              </motion.div>
+            ) : activeTab === 'receive' ? (
+              <motion.div
+                key="receive"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+
+              >
+                <Receiver onTransferStateChange={setIsReceiving} />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="session"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="p-8"
+              >
+                <div className="space-y-6">
+                  <h2 className="text-2xl font-bold text-center">Session Mode</h2>
+                  <p className="text-center opacity-70">Start a session or join an existing one</p>
+
+                  <div className="flex gap-4">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const ticket = await invoke('start_session') as string
+                          setSessionTicket(ticket)
+                          setIsSessionHost(true)
+                          setInSession(true)
+                        } catch (err) {
+                          console.error('Failed to start session:', err)
+                          alert('Failed to start session: ' + err)
+                        }
+                      }}
+                      className="flex-1 py-4 px-6 rounded-lg transition-colors hover:opacity-80"
+                      style={{
+                        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        color: 'rgb(59, 130, 246)'
+                      }}
+                    >
+                      Start Session
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const ticket = prompt('Enter session ticket:')
+                        if (ticket) {
+                          setSessionTicket(ticket)
+                          setIsSessionHost(false)
+                          setInSession(true)
+                        }
+                      }}
+                      className="flex-1 py-4 px-6 rounded-lg transition-colors hover:opacity-80"
+                      style={{
+                        backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                        border: '1px solid rgba(34, 197, 94, 0.3)',
+                        color: 'rgb(34, 197, 94)'
+                      }}
+                    >
+                      Join Session
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
           </div>
         </div>
       </div>

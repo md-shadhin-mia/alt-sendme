@@ -8,6 +8,7 @@ use sendme::SendResult;
 pub struct AppState {
     pub current_share: Option<ShareHandle>,
     pub is_transporting: bool, // True when actual data transfer is happening
+    pub current_session: Option<Arc<tokio::sync::Mutex<sendme::SessionState>>>,
 }
 
 /// Handle for an active sharing session

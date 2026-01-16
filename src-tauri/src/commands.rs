@@ -198,3 +198,175 @@ pub async fn get_transport_status(
     let app_state = state.lock().await;
     Ok(app_state.is_transporting)
 }
+
+// ========== Session Commands ==========
+
+/// Start a new session (creates a ticket that others can connect to)
+#[tauri::command]
+pub async fn start_session(
+    state: State<'_, AppStateMutex>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    use sendme::{SessionHandler, SESSION_ALPN};
+    
+    let mut app_state = state.lock().await;
+    
+    // Check if already in a session
+    if app_state.current_session.is_some() {
+        return Err("Already in a session. Please stop current session first.".to_string());
+    }
+    
+    // Create event emitter
+    let emitter = Arc::new(TauriEventEmitter {
+        app_handle: app_handle.clone(),
+    });
+    let boxed_handle: AppHandle = Some(emitter);
+    
+    // Create session handler
+    let handler = Arc::new(SessionHandler::new(boxed_handle.clone()));
+    let session_state = handler.get_state();
+    
+    // Create endpoint with session protocol
+    let secret_key = sendme::get_or_create_secret().map_err(|e| e.to_string())?;
+    let endpoint = iroh::Endpoint::builder()
+        .alpns(vec![SESSION_ALPN.to_vec()])
+        .secret_key(secret_key)
+        .relay_mode(iroh::RelayMode::Default)
+        .bind()
+        .await
+        .map_err(|e| format!("Failed to bind endpoint: {}", e))?;
+    
+    // Create router with session protocol
+    let router = iroh::protocol::Router::builder(endpoint)
+        .accept(SESSION_ALPN, handler)
+        .spawn();
+    
+    let ep = router.endpoint();
+    
+    // Wait for relay connection
+    tokio::time::timeout(std::time::Duration::from_secs(30), async move {
+        let _ = ep.online().await;
+    })
+    .await
+    .map_err(|_| "Timeout waiting for relay connection".to_string())?;
+    
+    // Generate a session ticket (using node address)
+    let node_addr = router.endpoint().node_addr();
+    let ticket = iroh_blobs::ticket::BlobTicket::new(
+        node_addr,
+        iroh_blobs::Hash::new([0u8; 32]), // Dummy hash for session ticket
+        iroh_blobs::BlobFormat::Raw,
+    );
+    
+    // Store session state
+    app_state.current_session = Some(session_state);
+    
+    // Keep router alive (we need to store it somewhere)
+    // For now, we'll let it live in the background
+    tokio::spawn(async move {
+        let _ = router.shutdown().await;
+    });
+    
+    Ok(ticket.to_string())
+}
+
+/// Connect to an existing session using a ticket
+#[tauri::command]
+pub async fn connect_session(
+    ticket: String,
+    state: State<'_, AppStateMutex>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut app_state = state.lock().await;
+    
+    // Check if already in a session
+    if app_state.current_session.is_some() {
+        return Err("Already in a session. Please stop current session first.".to_string());
+    }
+    
+    // Create event emitter
+    let emitter = Arc::new(TauriEventEmitter {
+        app_handle: app_handle.clone(),
+    });
+    let boxed_handle: AppHandle = Some(emitter);
+    
+    // Connect to session
+    let session_state = sendme::connect_session(ticket, boxed_handle)
+        .await
+        .map_err(|e| format!("Failed to connect to session: {}", e))?;
+    
+    app_state.current_session = Some(session_state);
+    
+    Ok(())
+}
+
+/// Send a text message in the current session
+#[tauri::command]
+pub async fn send_session_message(
+    message: String,
+    state: State<'_, AppStateMutex>,
+) -> Result<(), String> {
+    let app_state = state.lock().await;
+    
+    let session = app_state
+        .current_session
+        .as_ref()
+        .ok_or("No active session")?;
+    
+    let session_msg = sendme::SessionMessage::Text {
+        content: message,
+    };
+    
+    session
+        .lock()
+        .await
+        .send_message(session_msg)
+        .await
+        .map_err(|e| format!("Failed to send message: {}", e))?;
+    
+    Ok(())
+}
+
+/// Send a call signal in the current session
+#[tauri::command]
+pub async fn send_call_signal(
+    signal_type: String,
+    data: String,
+    state: State<'_, AppStateMutex>,
+) -> Result<(), String> {
+    let app_state = state.lock().await;
+    
+    let session = app_state
+        .current_session
+        .as_ref()
+        .ok_or("No active session")?;
+    
+    let session_msg = sendme::SessionMessage::CallSignal {
+        signal_type,
+        data,
+    };
+    
+    session
+        .lock()
+        .await
+        .send_message(session_msg)
+        .await
+        .map_err(|e| format!("Failed to send call signal: {}", e))?;
+    
+    Ok(())
+}
+
+/// Stop the current session
+#[tauri::command]
+pub async fn stop_session(
+    state: State<'_, AppStateMutex>,
+) -> Result<(), String> {
+    let mut app_state = state.lock().await;
+    
+    if app_state.current_session.take().is_some() {
+        // Session will be cleaned up when dropped
+        Ok(())
+    } else {
+        Err("No active session".to_string())
+    }
+}
